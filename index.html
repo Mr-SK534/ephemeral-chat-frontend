@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Ephemeral Chat</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: 'Segoe UI', sans-serif; margin: 0; background: #f4f6f9; padding: 20px; }
+    .container { max-width: 600px; margin: 0 auto; }
+    #join-form, #chat { background: white; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); padding: 20px; text-align: center; }
+    #chat { display: none; }
+    input[type="text"] { width: 100%; padding: 14px; margin: 10px 0; border: 1px solid #ddd; border-radius: 8px; font-size: 16px; }
+    button { background: #007bff; color: white; border: none; padding: 14px 24px; border-radius: 8px; cursor: pointer; font-size: 16px; }
+    button:hover { background: #0056b3; }
+    #messages { height: 65vh; overflow-y: auto; padding: 10px; margin: 15px 0; border-top: 1px solid #eee; }
+    .message { margin: 8px 0; padding: 10px 14px; border-radius: 18px; max-width: 80%; word-wrap: break-word; }
+    .mine { background: #007bff; color: white; margin-left: auto; border-bottom-right-radius: 4px; }
+    .other { background: #e9ecef; margin-right: auto; border-bottom-left-radius: 4px; }
+    .system { color: #666; font-style: italic; text-align: center; font-size: 0.9em; margin: 10px 0; }
+    #form { display: flex; border-top: 1px solid #ddd; margin-top: 10px; }
+    #input { flex: 1; border: none; padding: 14px; font-size: 16px; }
+    #input:focus { outline: none; }
+    .send-btn { background: #007bff; color: white; border: none; padding: 0 20px; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div id="join-form">
+      <h2>Ephemeral Chat</h2>
+      <p>Enter a chat code to join. Data deletes when everyone leaves.</p>
+      <form id="join">
+        <input id="code" placeholder="e.g., secret123" required />
+        <button type="submit">Join Chat</button>
+      </form>
+    </div>
+
+    <div id="chat">
+      <div id="messages"></div>
+      <form id="form">
+        <input id="input" placeholder="Type a message..." autocomplete="off" />
+        <button class="send-btn">Send</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Use CDN for Socket.IO -->
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+  <script>
+    // CHANGE THIS AFTER DEPLOYING BACKEND
+    const BACKEND_URL = 'https://your-chat-backend.up.railway.app'; // ← UPDATE THIS!
+
+    const joinForm = document.getElementById('join');
+    const codeInput = document.getElementById('code');
+    const chatDiv = document.getElementById('chat');
+    const messages = document.getElementById('messages');
+    const form = document.getElementById('form');
+    const input = document.getElementById('input');
+
+    let socket;
+    let username = 'Anonymous';
+
+    joinForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const code = codeInput.value.trim();
+      if (!code) return alert('Enter a chat code!');
+
+      username = prompt('Your name:', 'User') || 'Anonymous';
+
+      socket = io(BACKEND_URL, {
+        transports: ['websocket', 'polling']
+      });
+
+      socket.on('connect', () => {
+        socket.emit('join', { code, username });
+        document.getElementById('join-form').style.display = 'none';
+        chatDiv.style.display = 'block';
+      });
+
+      socket.on('connect_error', (err) => {
+        alert('Cannot connect to server. Check backend URL.');
+        console.error(err);
+      });
+
+      form.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const msg = input.value.trim();
+        if (msg) {
+          socket.emit('chat message', msg);
+          input.value = '';
+        }
+      });
+
+      socket.on('chat message', (data) => {
+        const div = document.createElement('div');
+        div.className = `message ${data.username === username ? 'mine' : 'other'}`;
+        div.innerHTML = `<strong>${data.username}:</strong> ${data.msg}`;
+        messages.appendChild(div);
+        messages.scrollTop = messages.scrollHeight;
+      });
+
+      socket.on('system message', (msg) => {
+        const div = document.createElement('div');
+        div.className = 'system';
+        div.textContent = msg;
+        messages.appendChild(div);
+        messages.scrollTop = messages.scrollHeight;
+      });
+
+      socket.on('chat closed', () => {
+        alert('Chat closed. All data deleted.');
+        location.reload();
+      });
+    });
+  </script>
+</body>
+</html>
