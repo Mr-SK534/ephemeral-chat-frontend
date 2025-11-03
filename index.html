@@ -1,187 +1,272 @@
-<script>
-  const BACKEND_URL = 'ephemeral-chat-backend-production-1085.up.railway.app';
-  const output = document.getElementById('output');
-  const input = document.getElementById('input');
-  const promptEl = document.getElementById('prompt');
-  let socket;
-  let username = 'guest';
-  let currentCode = '';
-  let typingTimer;
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>ephemeral-ssh-chat</title>
 
-  function addLine(text, type = 'normal') {
-    const line = document.createElement('div');
-    line.className = `line ${type}`;
-    line.innerHTML = text;
-    output.appendChild(line);
-    output.scrollTop = output.scrollHeight;
-  }
+  <!-- Hacker Font -->
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;600&display=swap" rel="stylesheet">
 
-  function setPrompt(name) {
-    promptEl.innerHTML = `┌─[${name}@${currentCode || 'chat'} ~]<br>└─$`;
-  }
-
-  function sendCommand(cmd) {
-    if (!cmd.trim()) return;
-    addLine(`┌─[${username}@${currentCode || 'chat'} ~]<br>└─$ ${cmd}`);
-
-    if (cmd === 'clear') {
-      output.innerHTML = '';
-      return;
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #000;
+      color: #0f0;
+      font-family: 'Fira Code', 'Courier New', monospace;
+      height: 100vh;
+      overflow: hidden;
+      padding: 15px;
+      line-height: 1.5;
+      font-size: 16px;
     }
-    if (cmd === 'help') {
-      addLine(`<span class="help">
-  help     show commands<br>
-  clear    clear screen<br>
-  who      show users online<br>
-  exit     leave chat<br>
-  [msg]    send message
-      </span>`);
-      return;
+    #terminal {
+      width: 100%;
+      height: 100%;
+      background: #000;
+      border: 1px solid #0f0;
+      border-radius: 8px;
+      padding: 16px;
+      overflow-y: auto;
+      box-shadow: 0 0 20px rgba(0, 255, 0, 0.3);
     }
-    if (cmd === 'exit') {
-      if (socket) socket.disconnect();
-      addLine('<span class="system" style="color:#ff5555">Disconnected. Chat closed.</span>');
-      setTimeout(() => location.reload(), 1500);
-      return;
+    .line {
+      display: block;
+      white-space: pre-wrap;
+      word-break: break-all;
     }
-    if (cmd === 'who') {
-      if (socket) socket.emit('request users');
-      return;
+    .prompt {
+      color: #0f0;
+    }
+    .input-line {
+      display: flex;
+      align-items: center;
+    }
+    #input {
+      background: transparent;
+      border: none;
+      color: #0f0;
+      font-family: inherit;
+      font-size: inherit;
+      outline: none;
+      flex: 1;
+      caret-color: #0f0;
+    }
+    .cursor {
+      display: inline-block;
+      width: 10px;
+      height: 1.2em;
+      background: #0f0;
+      animation: blink 1s step-end infinite;
+      margin-left: 2px;
+    }
+    @keyframes blink {
+      0%, 50% { opacity: 1; }
+      51%, 100% { opacity: 0; }
+    }
+    .system {
+      color: #0aa;
+      font-style: italic;
+    }
+    .typing {
+      color: #888;
+      font-size: 0.9em;
+      margin: 4px 0;
+    }
+    .header {
+      color: #0f0;
+      text-align: center;
+      margin-bottom: 12px;
+      font-weight: 600;
+      text-shadow: 0 0 5px #0f0;
+    }
+    .help {
+      color: #0f8;
+      margin: 6px 0;
+    }
+  </style>
+</head>
+<body>
+  <div id="terminal">
+    <div class="header">=== EPHEMERAL SSH CHAT v2.0 ===</div>
+    <div id="output"></div>
+    <div class="input-line">
+      <span class="prompt" id="prompt">guest@chat:~$ </span>
+      <input id="input" autocomplete="off" autofocus />
+      <span class="cursor"></span>
+    </div>
+  </div>
+
+  <!-- Socket.IO Client -->
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+
+  <script>
+    // === CONFIG: CHANGE THIS TO YOUR RAILWAY BACKEND URL ===
+    const BACKEND_URL = 'ephemeral-chat-backend-production-1085.up.railway.app';
+
+    const output = document.getElementById('output');
+    const input = document.getElementById('input');
+    const prompt = document.getElementById('prompt');
+    let socket;
+    let username = 'guest';
+    let currentCode = '';
+    let typingTimer;
+
+    function addLine(text, type = 'normal') {
+      const line = document.createElement('div');
+      line.className = `line ${type}`;
+      line.innerHTML = text;
+      output.appendChild(line);
+      output.scrollTop = output.scrollHeight;
     }
 
-    if (socket && currentCode) {
-      socket.emit('chat message', cmd);
+    function setPrompt(name) {
+      prompt.textContent = `${name}@${currentCode || 'chat'}:~$ `;
     }
-  }
 
-  // === JOIN LOGIC (FIXED) ===
-  const urlParams = new URLSearchParams(window.location.search);
-  const urlCode = urlParams.get('code');
+    function sendCommand(cmd) {
+      if (!cmd.trim()) return;
+      addLine(`<span class="prompt">${username}@${currentCode || 'chat'}:~$</span> ${cmd}`);
 
-  if (urlCode) {
-    currentCode = urlCode;
-    // Show login screen
-    addLine(`<span class="system">SSH Login to ephemeral-chat</span>`);
-    addLine(`<span class="system">Chat Code: <strong>${currentCode}</strong></span>`);
-    addLine(`<span class="system">Enter username:</span>`);
-    input.placeholder = "Type your name and press Enter";
-    input.focus();
-
-    // Wait for user to type name and press Enter
-    const handleName = (e) => {
-      if (e.key === 'Enter') {
-        const name = input.value.trim();
-        if (!name) {
-          addLine('<span class="system" style="color:#ff5555">Username required!</span>');
-          return;
-        }
-        username = name;
-        input.value = '';
-        input.placeholder = "Type a message...";
-        input.removeEventListener('keydown', handleName);
-        setPrompt(username);
-        connectToChat(currentCode);
+      if (cmd === 'clear') {
+        output.innerHTML = '';
+        return;
       }
-    };
-    input.addEventListener('keydown', handleName);
+      if (cmd === 'help') {
+        addLine(`<span class="help">
+  help     show this menu<br>
+  clear    clear screen<br>
+  who      show online users<br>
+  exit     leave chat<br>
+  [any]    send message
+        </span>`);
+        return;
+      }
+      if (cmd === 'exit') {
+        if (socket) socket.disconnect();
+        addLine('<span class="system" style="color:#f55">Disconnected. Chat closed.</span>');
+        setTimeout(() => location.reload(), 1500);
+        return;
+      }
+      if (cmd === 'who') {
+        if (socket) socket.emit('request users');
+        return;
+      }
 
-  } else {
-    // No code → ask for one
-    addLine(`<span class="system">Welcome to Ephemeral SSH Chat</span>`);
-    addLine(`<span class="system">Enter chat code to connect:</span>`);
-    input.placeholder = "e.g., secret123";
-    input.focus();
+      if (socket && currentCode) {
+        socket.emit('chat message', cmd);
+      }
+    }
 
-    const handleCode = (e) => {
-      if (e.key === 'Enter') {
-        const code = input.value.trim();
-        if (!code) return;
-        currentCode = code;
+    // === JOIN FLOW ===
+    const urlParams = new URLSearchParams(window.location.search);
+    const urlCode = urlParams.get('code');
+
+    if (urlCode) {
+      currentCode = urlCode;
+      addLine(`<span class="system">SSH Login to ephemeral-chat</span>`);
+      addLine(`<span class="system">Chat Code: <strong>${currentCode}</strong></span>`);
+      addLine(`<span class="system">Enter username:</span>`);
+      input.placeholder = "Type name and press Enter";
+      input.focus();
+    } else {
+      addLine(`<span class="system">Welcome to Ephemeral SSH Chat</span>`);
+      addLine(`<span class="system">Enter chat code to connect:</span>`);
+      input.placeholder = "e.g., secret123";
+      input.focus();
+    }
+
+    let step = urlCode ? 'name' : 'code';
+
+    input.addEventListener('keydown', function handler(e) {
+      if (e.key !== 'Enter') return;
+
+      const value = input.value.trim();
+      if (!value) return;
+
+      if (step === 'code') {
+        currentCode = value;
         input.value = '';
         input.placeholder = "Enter your username...";
-        input.removeEventListener('keydown', handleCode);
-
-        addLine(`<span class="system">Chat Code: <strong>${code}</strong></span>`);
+        addLine(`<span class="system">Chat Code: <strong>${currentCode}</strong></span>`);
         addLine(`<span class="system">Enter username:</span>`);
-
-        const handleName = (e) => {
-          if (e.key === 'Enter') {
-            const name = input.value.trim() || 'guest';
-            username = name;
-            input.value = '';
-            input.placeholder = "Type a message...";
-            input.removeEventListener('keydown', handleName);
-            history.pushState(null, '', `?code=${code}`);
-            setPrompt(username);
-            connectToChat(code);
-          }
-        };
-        input.addEventListener('keydown', handleName);
+        step = 'name';
+        return;
       }
-    };
-    input.addEventListener('keydown', handleCode);
-  }
 
-  function connectToChat(code) {
-    socket = io(BACKEND_URL, { transports: ['websocket'] });
-
-    socket.on('connect', () => {
-      socket.emit('join', { code, username });
-      addLine(`<span class="system" style="color:#00ff00">Connected as <strong>${username}</strong>. Type 'help'.</span>`);
-    });
-
-    socket.on('connect_error', (err) => {
-      addLine(`<span class="system" style="color:#ff5555">Connection failed: ${err.message}</span>`);
-    });
-
-    socket.on('chat message', (data) => {
-      if (data.username === username) return;
-      addLine(`┌─[${data.username}@${currentCode} ~]<br>└─$ ${data.msg}`);
-    });
-
-    socket.on('system message', (msg) => {
-      addLine(`<span class="system">* ${msg}</span>`);
-    });
-
-    socket.on('user typing', (name) => {
-      clearTimeout(typingTimer);
-      let typingEl = document.querySelector('.typing');
-      if (!typingEl) {
-        typingEl = document.createElement('div');
-        typingEl.className = 'typing';
-        output.appendChild(typingEl);
+      if (step === 'name') {
+        username = value || 'guest';
+        input.value = '';
+        input.placeholder = "Type a message...";
+        input.removeEventListener('keydown', handler);
+        setPrompt(username);
+        history.pushState(null, '', `?code=${currentCode}`);
+        connectToChat(currentCode);
       }
-      typingEl.textContent = `${name} is typing...`;
-      output.scrollTop = output.scrollHeight;
-
-      typingTimer = setTimeout(() => {
-        if (typingEl) typingEl.remove();
-      }, 1500);
     });
 
-    socket.on('chat closed', () => {
-      addLine('<span class="system" style="color:#ff5555">Chat terminated. All data erased.</span>');
-      setTimeout(() => location.reload(), 2000);
-    });
-  }
+    function connectToChat(code) {
+      socket = io(BACKEND_URL, { transports: ['websocket'] });
 
-  // === INPUT HANDLING ===
-  input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-      const cmd = input.value.trim();
-      input.value = '';
-      if (currentCode && socket) {
-        sendCommand(cmd);
-        socket.emit('typing', false);
-      }
-    } else if (e.key.length === 1 && currentCode && socket) {
-      clearTimeout(typingTimer);
-      typingTimer = setTimeout(() => {
-        socket.emit('typing', true);
-      }, 300);
+      socket.on('connect', () => {
+        socket.emit('join', { code, username });
+        addLine(`<span class="system" style="color:#0f0">Connected as <strong>${username}</strong>. Type 'help'.</span>`);
+      });
+
+      socket.on('connect_error', (err) => {
+        addLine(`<span class="system" style="color:#f55">Connection failed: ${err.message}</span>`);
+      });
+
+      socket.on('chat message', (data) => {
+        if (data.username === username) return;
+        addLine(`<span class="prompt">${data.username}@${currentCode}:~$</span> ${data.msg}`);
+      });
+
+      socket.on('system message', (msg) => {
+        addLine(`<span class="system">* ${msg}</span>`);
+      });
+
+      socket.on('user typing', (name) => {
+        clearTimeout(typingTimer);
+        let typingEl = document.querySelector('.typing');
+        if (!typingEl) {
+          typingEl = document.createElement('div');
+          typingEl.className = 'typing';
+          output.appendChild(typingEl);
+        }
+        typingEl.textContent = `${name} is typing...`;
+        output.scrollTop = output.scrollHeight;
+
+        typingTimer = setTimeout(() => {
+          if (typingEl) typingEl.remove();
+        }, 1500);
+      });
+
+      socket.on('chat closed', () => {
+        addLine('<span class="system" style="color:#f55">Chat terminated. All data erased.</span>');
+        setTimeout(() => location.reload(), 2000);
+      });
     }
-  });
 
-  // Keep focus
-  document.addEventListener('click', () => input.focus());
-</script>
+    // === INPUT & TYPING ===
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        const cmd = input.value.trim();
+        input.value = '';
+        if (currentCode && socket) {
+          sendCommand(cmd);
+          socket.emit('typing', false);
+        }
+      } else if (e.key.length === 1 && currentCode && socket) {
+        clearTimeout(typingTimer);
+        typingTimer = setTimeout(() => {
+          socket.emit('typing', true);
+        }, 300);
+      }
+    });
+
+    // Keep focus
+    document.addEventListener('click', () => input.focus());
+  </script>
+</body>
+</html>
